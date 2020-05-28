@@ -1,0 +1,87 @@
+
+
+
+#Automation requisites
+#Keep this R file in the same and ensure the 2 input files are there
+# 1)NCC&Vendor_Mapping.xlsx  with sheetnames =  NCC Mapping  and Vendor Mapping
+# 2) SAP_Extract_Raw.xlsx  with sheetnames = Raw and Main Data
+
+setwd(getwd())
+
+
+#install.packages("data.table")
+#install.packages("xlsx")
+install.packages("dplyr")
+
+library("data.table")
+library("xlsx")
+library(dplyr)
+library(rJava)
+
+
+#import 2 files and 2 sheets from each of them
+NCC_mapping<-data.table(read.xlsx2("NCC&Vendor_Mapping.xlsx",sheetName = "NCC Mapping", stringsAsFactors=FALSE))
+Vendor_mapping<-data.table(read.xlsx2("NCC&Vendor_Mapping.xlsx",sheetName = "Vendor Mapping", stringsAsFactors=FALSE))
+raw<-data.table(read.xlsx2("SAP_Extract_Raw.xlsx",sheetName = "Raw"))
+im<-data.table(read.xlsx2("SAP_Extract_Raw.xlsx",sheetName = "MainData"))
+
+#created vector of colnames from im sheet
+im_col<-colnames(im)
+
+
+
+
+#required  columns
+req.cols <- colnames(im)
+
+raw_im<-raw[, .SD, .SDcols = intersect(colnames(im), colnames(raw))]
+
+#copying two excel ImRaw & FinalRaw into one excel
+write.xlsx(raw, file="Final_Main.xlsx", sheetName="Raw Data", row.names=FALSE)
+write.xlsx(raw_im, file="Final_Main.xlsx", sheetName="Main Data", append=TRUE, row.names=FALSE)
+
+
+#primarykey(NCC_mapping.NCC.Code) = im(NCC.Code)
+Vendor_mapping$vendor_scope<-"In-scope"
+NCC_mapping$ncc_scope<-"In-scope"
+
+
+#primarykey(Vendor_mapping.Vendor.Mapping) = im(Vendior.D.U.N.S.Number), match is in-scope
+raw_im_vm<-merge(raw_im, Vendor_mapping, by.x = "Vendor.D.U.N.S.Number" ,by.y = "VendorMapping", all.x = TRUE) 
+raw_im_vm_ncc<-merge(raw_im_vm, NCC_mapping, by.x = "NCC.Code" ,by.y = "NCC.Code", all.x = TRUE) 
+raw_im_vm_ncc$vendor_scope[is.na(raw_im_vm_ncc$vendor_scope)]<-"Out-scope"
+raw_im_vm_ncc$NCC.Description[is.na(raw_im_vm_ncc$NCC.Description)]<-"Out-scope"
+raw_im_vm_ncc$Spend.Purpose.Code[is.na(raw_im_vm_ncc$Spend.Purpose.Code)]<-"Out-scope"
+raw_im_vm_ncc$Spend.Purpose.Description[is.na(raw_im_vm_ncc$Spend.Purpose.Description)]<-"Out-scope"
+raw_im_vm_ncc$Global.Spend.Des[is.na(raw_im_vm_ncc$Global.Spend.Des)]<-"Out-scope"
+raw_im_vm_ncc$Payment.Type[is.na(raw_im_vm_ncc$Payment.Type)]<-"Out-scope"
+raw_im_vm_ncc$Optional...Mandatory[is.na(raw_im_vm_ncc$Optional...Mandatory)]<-"Out-scope"
+raw_im_vm_ncc$ncc_scope[is.na(raw_im_vm_ncc$ncc_scope)]<-"Out-scope"
+write.xlsx(raw_im_vm_ncc, file="Final_Main.xlsx", sheetName="Mapped Data", append=TRUE, row.names=FALSE)
+
+
+raw_im_vm_ncc_mandatory <- raw_im_vm_ncc[raw_im_vm_ncc$Optional...Mandatory=="Mandatory"]
+raw_im_vm_ncc_mandatory <- raw_im_vm_ncc_mandatory[raw_im_vm_ncc_mandatory$ncc_scope=="In-scope"]
+
+
+
+##write.xlsx(raw_im_vm_ncc_mandatory, "Final_Main.xlsx", sheetName="Potential Data Check", append=TRUE, row.names=FALSE)
+
+ ss<- CellStyle(raw_im_vm_ncc_mandatory) + Font(raw_im_vm_ncc_mandatory, isBold = TRUE) 
+write.xlsx(raw_im_vm_ncc_mandatory, "Final_Main.xlsx", sheetName="Potential Data Check", append=TRUE, row.names=FALSE)
+           
+ 
+
+
+#Rules for further filtering
+#1) LITE Scope Optional / Mandatory --> Mandatory
+#2) NCC Scope = InScope && Vendor Scope = InScope
+#3) NCC Scope = InScope && Vendor Scope = OutScope
+#View(raw_im_vm_ncc_mandatory)
+
+
+
+
+
+
+
