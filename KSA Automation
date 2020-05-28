@@ -1,0 +1,166 @@
+##################################Saudi direct spends automation#####################################
+
+#installing packages
+install.packages("xlsx")
+install.packages("tidyverse")
+install.packages("DT")
+install.packages("htmlTable")
+install.packages("condformat")
+install.packages("sqldf")
+install.packages("DT")
+install.packages("unglue")
+
+#loading packages
+library(dplyr)
+library(xlsx)
+library(tidyverse)
+library(DT)
+library(htmlTable)
+library(condformat)
+library(sqldf)
+library(DT)
+library(unglue)
+
+#getting directory
+getwd()
+
+#setting directory
+setwd("C:/Users/RANJASN1/OneDrive - Novartis Pharma AG/Work File/Saudi/Automation")
+getwd()
+
+#reading raw data and clean trim
+RawData <- read.xlsx(file = "RawFile.xlsx", 1, header = TRUE)
+RawData <- data.frame(lapply(RawData, trimws), stringsAsFactors = FALSE)
+
+#read mapping files and clean trim
+HCI <- read.xlsx(file = "HCIDatabase.xlsx", 1, header = TRUE)
+HCI <- data.frame(lapply(HCI, trimws), stringsAsFactors = FALSE)
+
+NCC <- read.xlsx(file = "NCC.xlsx", 1, header = TRUE)
+NCC <- data.frame(lapply(NCC, trimws), stringsAsFactors = FALSE)
+
+KRAUS <- read.xlsx(file = "KRAUS.xlsx", 1, header = TRUE)
+KRAUS <- data.frame(lapply(KRAUS, trimws), stringsAsFactors = FALSE)
+
+VendorInfo <- read.xlsx(file = "VendorInfo.xlsx", 1, header = TRUE)
+VendorInfo <- data.frame(lapply(VendorInfo, trimws), stringsAsFactors = FALSE)
+
+#filtering out data without CB
+DataWithoutCB <- RawData %>% filter(Vendor.Country == "Saudi Arabia")
+DataWithoutCB
+
+write.xlsx(DataWithoutCB, file = "DataWithoutCB.xlsx", append = FALSE)
+
+#merging data KRAUS and NCC
+KRAUSMerging <- merge(DataWithoutCB, KRAUS, by.x = 'SIM', all.x = TRUE)
+
+NCCMerging <- merge(KRAUSMerging, NCC, by.x = 'NCC', all.x = TRUE)
+
+VendorMerging <- merge(NCCMerging, VendorInfo, by.x = "Vendor", all.x = TRUE)
+
+FinalFile <- merge(VendorMerging, HCI, by.x = "VendorName", all.x = TRUE)
+
+#exporting data
+write.xlsx(FinalFile, file = "FinalFile.xlsx", append = FALSE)
+
+#Finding InScope Data
+InScopeData <- FinalFile %>% filter(Xpend.Code != "NA" & SFDA.Disclosure. != "#N/A")
+
+#exporting data
+write.xlsx(InScopeData, file = "InScopeData.xlsx", append = FALSE)
+
+#Delete unnecessary column
+InScopeData$Ref.. <- NULL
+
+view(InScopeData)
+
+#creating one new data frame for HCP data
+HCPData <- InScopeData %>% filter(Xpend.Code == "HCP")
+write.xlsx(HCPData, file = "HCPData.xlsx", append = FALSE)
+
+#Delete duplicate column
+InScopeData$Vendor.Name <- NULL
+
+#Creating duplicate column of Vendor Name to segregate it in first name and last name
+HCPData$VendorName1 <- HCPData$VendorName
+
+#Segregating Vendor Name into First Name and Last Name
+HCPData <- extract(HCPData, VendorName1, c("First Name", "Last Name"), "([^ ]+) (.*)")
+
+#Deleting HCI column from HCP data as it is not needed
+HCPData$Hospital.Code <- NULL
+HCPData$X.City <- NULL
+HCPData$Vendor.Name <-NULL
+
+#Replacing NA with comments
+HCPData$IQAMA..[which(is.na(HCPData$IQAMA..))] <- "Not Provided"
+HCPData$Medical.License..[which(is.na(HCPData$Medical.License..))] <- "Not Provided"
+HCPData$Email[which(is.na(HCPData$Email))] <- "Not Provided"
+HCPData$Telephone[which(is.na(HCPData$Telephone))] <- "Not Provided"
+
+#creating one new data frame for HCO data
+HCOData <- InScopeData %>% filter(Xpend.Code == "HCO")
+
+HCOData$IQAMA.. <- NULL
+HCOData$Medical.License.. <- NULL
+HCOData$Email <- NULL
+HCOData$Telephone <- NULL
+
+#Replacing NA with comments
+HCOData$Hospital.Code[which(is.na(HCOData$Hospital.Code))] <- "Not Provided"
+HCOData$X.City[which(is.na(HCOData$X.City))] <- "Not Provided"
+
+write.xlsx(HCOData, file = "HCOData.xlsx", append = FALSE)
+
+#merge multiple dataframe into one excel file 
+#run 7 lines at once
+write.xlsx(InScopeData, file = "Mapped Sheet.xlsx", sheetName = "MappedData", row.names = FALSE)
+write.xlsx(HCPData, file = "Mapped Sheet.xlsx",sheetName = "HCP",append = TRUE, row.names = FALSE)
+write.xlsx(HCOData,file = "Mapped Sheet.xlsx", sheetName = "HCO", append = TRUE, row.names = FALSE)
+write.xlsx(KRAUS, file = "Mapped Sheet.xlsx", sheetName = "KRAUS", append = TRUE, row.names = FALSE)
+write.xlsx(HCI, file = "Mapped Sheet.xlsx", sheetName = "HCI", append = TRUE, row.names = FALSE)
+write.xlsx(NCC, file = "Mapped Sheet.xlsx", sheetName = "NCC", append = TRUE, row.names = FALSE)
+write.xlsx(VendorInfo, file = "Mapped Sheet.xlsx", sheetName = "VendorInfo", append = TRUE, row.names = FALSE)
+
+#Creating Data Request Template
+
+#HCO Request template
+HCORequestTemplate <- as.data.frame(matrix(nrow = nrow(HCOData), ncol = 3))
+names(HCORequestTemplate) <- c("Vendor", "Vendor Name", "HCI Code")
+
+HCORequestTemplate$Vendor <- HCOData$Vendor
+HCORequestTemplate$`Vendor Name` <- HCOData$VendorName
+HCORequestTemplate$`HCI Code` <- HCOData$Hospital.Code 
+
+#Finding Duplicate Values in HCO request template
+duplicated(HCORequestTemplate)
+
+#Removing duplicate value from HCO request template
+HCORequestTemplate <- HCORequestTemplate %>% distinct()
+
+write.xlsx(HCORequestTemplate, file = "HCO Request Template.xlsx", append = FALSE)
+
+#HCP Request template
+HCPRequestTemplate <- as.data.frame(matrix(nrow = nrow(HCPData), ncol = 14))
+names(HCPRequestTemplate) <- c("Vendor", "Vendor Name", "First Name", "Last Name", "Purchase Order", "NCC Code", "NCC Desc",
+                            "Vendor Clear Date", "Requestor Name", "IQAMA", "Medical Licence", "Email", "Telephone", "Amount")
+
+HCPRequestTemplate$Vendor <- HCPData$Vendor
+HCPRequestTemplate$`Vendor Name` <- HCPData$VendorName
+HCPRequestTemplate$`First Name` <- HCPData$`First Name`
+HCPRequestTemplate$`Last Name` <- HCPData$`Last Name`
+HCPRequestTemplate$`Purchase Order` <- HCPData$Purchase.Order
+HCPRequestTemplate$`NCC Code` <- HCPData$NCC
+HCPRequestTemplate$`NCC Desc` <- HCPData$NCC.Description
+HCPRequestTemplate$`Vendor Clear Date` <- HCPData$Vendor.Clear.Date
+HCPRequestTemplate$`Requestor Name` <- "N/A"
+HCPRequestTemplate$IQAMA <- HCPData$IQAMA..
+HCPRequestTemplate$`Medical Licence`<- HCPData$Medical.License..
+HCPRequestTemplate$Email <- HCPData$Email
+HCPRequestTemplate$Telephone <- HCPData$Telephone
+HCPRequestTemplate$Amount <- HCPData$Debit.Credit.Amount.LC.PCA
+
+HCPRequestTemplateMissingInfo <- HCPRequestTemplate %>% filter(IQAMA == 'Not Provided' & `Medical Licence` == 'Not Provided'
+                                                          & Email == 'Not Provided' & Telephone == 'Not Provided')
+
+write.xlsx(HCPRequestTemplateMissingInfo, file = "HCP Request Template.xlsx", append = FALSE)
