@@ -1,0 +1,61 @@
+library(XML)
+etaskData <- as.data.frame(readHTMLTable(file.choose(),skip.rows = 1))
+
+#library(xlsx)
+#etaskData <- read.xlsx(file.choose(),1)
+print("Processing E-task report...")
+names(etaskData) <- c("Email From","Email To","ETask-ID","CreateDateTime","EmailSubject","Work Status")
+etaskData$EmailSubject <- as.character(etaskData$EmailSubject)
+
+apac <- etaskData[grep("GES_APAC",etaskData$`Email To`),]
+
+output <- as.data.frame(matrix(nrow=nrow(apac),ncol=30))
+names(output) <- c("E-Task","Account","Analyst","Priority","Invalid","Pre Quote","Post Bind","Terrorism","Comments","Account Received Date","U/W Req Date","Sender ID","Account Subject","Branch","U/W Priority","No of Location","No of Policy Options","Region","Policy Number","Status","INCEPT","EXPIR","Complexity","ProductSegment","GESWB","PCID","PPID","PID","TaskID","WB")
+
+output$GESWB <- "APAC"
+output$Complexity <- "High"
+output$Analyst <- "Unassigned"
+output$`Account Subject`<- apac$EmailSubject
+
+output$`E-Task` <- apac$`ETask-ID`
+output$`Sender ID` <- apac$`Email From`
+output$Account <- rapply(strsplit(apac$EmailSubject,"_"),function(x)x[1])
+output$Branch <- rapply(strsplit(apac$EmailSubject,"_"),function(x)x[2])
+output$Branch<-stringr::str_replace(output$Branch,"Â","")
+output$Branch<-stringr::str_replace(output$Branch,"Â","")
+output$Priority[rapply(strsplit(apac$EmailSubject,"_"),function(x)x[length(x)])=="RUSH"] <- "Y"
+output$`Pre Quote`[grep("_Pre_",apac$EmailSubject)] <- "Y"
+output$`Post Bind`[grep("_Post",apac$EmailSubject)] <- "Y"
+output$GESWB[grep("_Japan",apac$EmailSubject)] <- "Japan"
+output$Branch[grep("_Japan",apac$EmailSubject)] <- "Japan" ## ???
+output$Complexity[grep("L_<50",apac$EmailSubject)] <- "Low"
+output$`Account Received Date` <- apac$CreateDateTime ##??
+
+#Triage indicator
+output$WB[grepl("> USD25M",output$`Account Subject`)&output$`Pre Quote`=="Y"] <- "Y"
+#output$WB[is.na(output$WB)&output$`Pre Quote`=="Y"] <- "N"
+output$WB[is.na(output$WB)] <- "N" # PQ and PB accounts that are not eligible for TRIAGE
+
+#Fix for Invalid name and FFM
+output$Invalid[is.na(output$`Pre Quote`)&is.na(output$`Post Bind`)] <- "Y"
+output$Account[grepl("FFM_",output$`Account Subject`)] <- rapply(strsplit(apac$EmailSubject[grepl("FFM_",output$`Account Subject`)],"_"),function(x)x[2])
+
+# Status and UW name
+output$`Sender ID` <- rapply(strsplit(as.character(output$`Sender ID`),split="@"),function(x)x[1])
+output$`Sender ID` <- gsub("."," ",output$`Sender ID`,fixed=T)
+output$Status <- "Unassigned"
+
+# Fix for account received date. Time > 6:00 P.M E.S.T
+library(lubridate)
+output$`Account Received Date` <- mdy_hm(output$`Account Received Date`) # Format to 24 hr
+output$`Account Received Date`[hour(output$`Account Received Date`)>6] <- output$`Account Received Date`[hour(output$`Account Received Date`)>6] + days(1)
+output$`Account Received Date` <- date(output$`Account Received Date`)
+
+# Filling 'N' indicators
+#output[is.na(output[,c("Priority","Invalid","Pre Quote","Post Bind")])] <- "N" # didn't work :(
+#output$Priority[is.na(output$Priority)] <- "N"
+output$Invalid[is.na(output$Invalid)] <- "N"
+output$`Pre Quote`[is.na(output$`Pre Quote`)] <- "N"
+output$`Post Bind`[is.na(output$`Post Bind`)] <- "N"
+
+write.csv(output,"~/Output1.csv",na="",row.names = F)
