@@ -1,0 +1,356 @@
+################################Slovenia Direct Spend SZ Automation#######################
+#installing packages
+#install.packages("xlsx")
+#install.packages("tidyverse")
+#install.packages("DT")
+#install.packages("htmlTable")
+#install.packages("condformat")
+#install.packages("DT")
+#install.packages("unglue")
+#install.packages("openxlsx")
+#install.packages("data.table")
+#install.packages("janitor")
+#install.packages("lubridate")
+#install.packages("gtools")
+#install.packages("arsenal")
+
+#loading packages
+library(dplyr)
+library(xlsx)
+library(tidyverse)
+library(DT)
+library(htmlTable)
+library(condformat)
+library(DT)
+library(openxlsx)
+library(data.table)
+library(janitor)
+library(lubridate)
+library(gtools)
+library(arsenal)
+library(stringr)
+library(tidyr)
+
+#getting directory
+getwd()
+
+#Setting directory
+#Change the file path as per your system folder
+setwd("C:/Users/RANJASN1/OneDrive - Novartis Pharma AG/Work File/Slovenia/Slovenia Automation/Final")
+getwd()
+
+#..............................................Data Mapping and Filter (Table 03).........................................#
+
+#reading raw data and clean trim
+RawData <- read.xlsx("Table 3 Raw Data.xlsx", detectDates = TRUE)
+RawData <- data.frame(lapply(RawData, trimws), stringsAsFactors = FALSE)
+
+#read mapping files and clean trim
+VMDExtract <- read.xlsx("VMD Data.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+VMDExtract <- data.frame(lapply(VMDExtract, trimws), stringsAsFactors = FALSE)
+VMDExtract <- VMDExtract %>% distinct()
+
+
+#Selecting only required column for data mapping
+VMDData <- VMDExtract %>% select(LFA1.LIFNR...Vendor, LFA1.NAME1...Name.1, ADDR.HOUSE_NUM1...House.No., 
+                                 ADDR.STREET...Street,LFA1.KRAUS...Credit.information.number, LFA1.STCEG...VAT.Registration.No.,
+                                 LFA1.STCD1...Tax.Number.1, LFA1.ORT01...City)
+
+#Concatinating address and tax number column
+VMDData$Adress <- paste(VMDData$ADDR.HOUSE_NUM1...House.No., VMDData$ADDR.STREET...Street)
+
+VMDMap <- VMDData %>% mutate(iftax = coalesce(.$LFA1.STCD1...Tax.Number.1, .$LFA1.STCEG...VAT.Registration.No.))
+
+#Deleting duplicate columns
+VMDMap$LFA1.STCD1...Tax.Number.1 <- NULL
+VMDMap$LFA1.STCEG...VAT.Registration.No. <- NULL
+VMDMap$ADDR.STREET...Street<- NULL
+VMDMap$ADDR.HOUSE_NUM1...House.No. <- NULL
+
+NCC <- read.xlsx("Global TOV.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+NCC <- data.frame(lapply(NCC,trimws), stringsAsFactors = FALSE)
+
+MAContract <- read.xlsx("MA Contract.xlsx", sheet = 1, startRow = 1, colNames = TRUE)
+MAContract <- data.frame(lapply(MAContract, trimws), stringAsFactors = FALSE)
+
+MAContractMap <- MAContract %>% select(Name, Address, Tax.no, Vendor.type, Document.Number)
+MAContractMap <- MAContractMap %>% distinct()
+
+#Mapping Data
+NCCMapping <- merge(x = RawData, y = NCC, by.x = "Account", by.y = "GL.Account", all.x = TRUE)
+
+FullData <- merge(x = NCCMapping, y = VMDData, by.x = "Offsetting.acct.no.", by.y = "LFA1.LIFNR...Vendor", all.x = TRUE)
+
+#Filtering Data
+#Filtering Clearing date
+DateFilter <- FullData %>% 
+  filter(Clearing.date >= as.Date("2019-12-31") & Clearing.date <= as.Date("2020-03-31"))
+
+#Renaming columns
+colnames(DateFilter)[which(names(DateFilter) == "LFA1.NAME1...Name.1")] <- "Name"
+colnames(DateFilter)[which(names(DateFilter) == "Adress")] <- "Address"
+colnames(DateFilter)[which(names(DateFilter) == "LFA1.KRAUS...Credit.information.number")] <- "Vendor Type"
+colnames(DateFilter)[which(names(DateFilter) == "LFA1.STCD1...Tax.Number.1")] <- "Tax no"
+colnames(DateFilter)[which(names(DateFilter) == "LFA1.ORT01...City")] <- "City"
+
+
+#Filter Vendor type
+VendorTypeFilter <- DateFilter %>% filter(`Vendor Type` %in% c("HCOR", "HCPR", "HOSP"))
+
+#Creating function to negate %in% to use it as a %ni%
+"%ni%" <- Negate("%in%")
+
+#Finding InScope Data
+InscopeData <- VendorTypeFilter %>% 
+  filter(NCC %ni% c('5510010','5515010','5535900',
+                    '5540100','5570030','5570100','5599999','5610010','5615010','5620010','5620015',
+                    '5620040','5620999','5630010','5645040','5655030','5699999'))
+
+
+InscopeData <- InscopeData %>% mutate(TaxNo = coalesce(.$`Tax no`,LFA1.STCEG...VAT.Registration.No.))
+
+InscopeData$`Tax no` <- NULL
+
+#Exporting InScopeData
+write.xlsx(InscopeData, file = "InScope Data.xlsx")
+
+
+#Data Filtering Advice Contract SX
+SXFilter <- FullData %>% filter(Document.Type == "SX") 
+SXFilter <- SXFilter %>% filter(str_detect(Reference, "MA-"))
+
+SXMap <- merge(x = SXFilter, y = MAContractMap, by.x = "Document.Number", by.y = "Document.Number", all.x = TRUE)
+
+#Remove 2019 data from SXMap Posting Date Column
+SXDateFilter <- SXMap %>% 
+  filter(Posting.Date >= as.Date("2019-12-31") & Posting.Date <= as.Date("2020-03-31"))
+
+#Final SX Data
+FinalSXData <- SXDateFilter %>% filter(Vendor.type != "PRPE")
+
+colnames(FinalSXData)[which(names(FinalSXData) == "Tax.No")] <- "TaxNo"
+FinalSXData$Clearing.date <- FinalSXData$Document.Date
+colnames(FinalSXData)[which(names(FinalSXData) == "LFA1.ORT01...City")] <- "City"
+
+write.xlsx(FinalSXData, file = "SX Data.xlsx")
+
+#PRPE data
+PRPEData <- SXDateFilter %>% filter(Vendor.type == "PRPE")
+
+#R&D Data
+RnDData <- DateFilter %>% filter(str_detect(NCC.Description, "R&D"))
+RnDHOSP <- RnDData %>% filter(`Vendor Type` == "HOSP")
+RnDHCOR <- RnDData %>% filter(`Vendor Type` == "HCOR")
+
+FinalRnDData <- rbind(RnDHCOR, RnDHOSP)
+
+#Out Of Scope data based on Vendor type
+OutOfScope_VendorType <- DateFilter %>% filter(`Vendor Type` %ni% c("HCOR", "HCPR", "HOSP"))
+
+#Finding Out of Scope data for previous quarters
+OutOfScope_previousQuarters <- DateFilter %>% filter(Clearing.date < as.Date("2020-01-01"))
+
+#Merging Out Of Scope data
+Final_OutofScope_Data <- rbind(OutOfScope_VendorType, OutOfScope_previousQuarters)
+
+#Exporting Table 03
+OutputFiles <- list("In Scope Data" = InscopeData, "PRPR" = PRPEData, "R&D" = FinalRnDData,
+                    "Out of Scope Data" = Final_OutofScope_Data, "VMD Data" = VMDExtract, "NCC" = NCC,
+                    "MA Contract" = MAContract)
+
+write.xlsx(OutputFiles, file = "Table 03 Extract.xlsx")
+
+#..............................................File Preparation (Table 05)..............................................#
+
+#Creating a duplicate data frame for validation purpose
+IncopeData_Validation <- data.frame(InscopeData)
+SXData_Validation <- data.frame(FinalSXData)
+
+#Uploading Mapping Files
+ConsentData <- read.xlsx("Consent Data.xlsx")
+ConsentData <- data.frame(lapply(ConsentData, trimws), stringsAsFactors = FALSE)
+ConsentData <- ConsentData %>% distinct()
+
+FullDetails <- read.xlsx("Full Details.xlsx", detectDates = TRUE)
+FullDetails <- data.frame(lapply(FullDetails, trimws), stringsAsFactors = FALSE)
+
+FullDetails_MappingSheet <- data.frame(FullDetails)
+FUllDetails_SXMapppingsheet <- data.frame(FullDetails)
+
+VendorMappingData <- read.xlsx("Vendor Mapping.xlsx", detectDates = TRUE)
+VendorMappingData <- data.frame(lapply(VendorMappingData, trimws), stringsAsFactors = FALSE)
+
+#Mapping of Full Details tabs
+#To be used to mapping InScope Data
+FullDetails_Map <- FullDetails_MappingSheet %>% select(Tax.ID, CR.Type, First.Name, Last.Name, City, Postal.Code, 
+                                                       CR.Global.Xpend.ID, Technical.CR.ID)
+
+#To be used to mapping SX data
+FullDetails_SXMap <- FUllDetails_SXMapppingsheet %>% select(Tax.ID, Technical.CR.ID, Brick, Benefactor.Category,
+                                                            Speciality1, Business.Area.Description, Organization, Consent.Flag)
+
+FUllDetails_SXMapping <- FullDetails_SXMap %>% distinct()
+
+#Merging Full Data
+Fulldata_DataMapping <- merge(IncopeData_Validation, FullDetails_Map, by.x = "TaxNo", by.y = "Tax.ID",all.x = TRUE)
+
+Fulldata_DataMapping$CR.Type <- "HCO"
+
+Fulldata_DataMapping$First.Name <- NULL
+Fulldata_DataMapping$Last.Name <- NULL
+
+#Merging SX Data
+SXData_DataMapping <- merge(SXData_Validation, FUllDetails_SXMapping, by.x = "Tax.no", by.y = "Tax.ID", all.x = TRUE) 
+
+#Consent Mapping
+SX_Consent_Mapping <- merge(SXData_DataMapping, ConsentData, by.x = "Tax.no", by.y = "Tax", all.x = TRUE)
+
+SX_Consent_Mapping$Name.x <- gsub( "Dr.", "", as.character(SX_Consent_Mapping$Name.x))
+SX_Consent_Mapping <- extract(SX_Consent_Mapping, Name.x, c("First Name", "Last Name"), "([^ ]+) (.*)")
+
+write.xlsx(Fulldata_DataMapping, file = "Full.xlsx")
+
+#Deleting Un-necessary columns
+SX_Consent_Mapping$LFA1.NAME1...Name.1 <- NULL
+SX_Consent_Mapping$ADDR.HOUSE_NUM1...House.No. <- NULL
+SX_Consent_Mapping$LFA1.KRAUS...Credit.information.number <- NULL
+SX_Consent_Mapping$LFA1.STCD1...Tax.Number.1 <- NULL
+SX_Consent_Mapping$LFA1.STCEG...VAT.Registration.No. <- NULL
+SX_Consent_Mapping$Adress <- NULL
+SX_Consent_Mapping$Home.Address <- NULL
+SX_Consent_Mapping$Name.y <- NULL
+SX_Consent_Mapping$Surname <- NULL
+SX_Consent_Mapping$Work.Address <- NULL
+SX_Consent_Mapping$Place2 <- NULL
+SX_Consent_Mapping$Postal.Code4 <- NULL
+
+SX_Consent_Mapping$CR.Type <- "HCP"
+
+colnames(SX_Consent_Mapping)[which(names(SX_Consent_Mapping) == "Place")] <- "City"
+colnames(SX_Consent_Mapping)[which(names(SX_Consent_Mapping) == "Tax.no")] <- "TaxNo"
+
+write.xlsx(SX_Consent_Mapping, file = "SXMap.xlsx")
+
+#Binding data
+BoundData <- smartbind(Fulldata_DataMapping, SX_Consent_Mapping)
+
+BoundData$City.y <- NULL
+BoundData$City <- NULL
+colnames(BoundData)[which(names(BoundData) == "City.x")] <- "City"
+
+write.xlsx(BoundData, file = "Bound.xlsx")
+
+#................................................Spend PMU.......................................................
+
+PMUTemplate_Spend <- as.data.frame(matrix(nrow = nrow(BoundData), ncol = 97))
+
+#Assigning names to columns
+names(PMUTemplate_Spend) <- c("SpendId","Division","Country","LocalCRID","LocalCRIDType","SpendPurpose",
+                              "OtherSpendPurpose","RelationPurpose","RelationType","SpendDate","SpendAmount",
+                              "SpendCurrency","ConsentIndicator","ConsentReceivedDate","ConsentID","ProductName1",
+                              "EventId","CRMEventId","ContractID","SourceLineID","XBorderFlag","PayeeName",
+                              "PayingDivision","PayingCountry","CompanyCode","CRFirstName","CRLastName","CRAddressLine1",
+                              "CRCity","CRCountry","CRZIPCode","CRSpeciality","SpendPONumber","PaymentMethod",
+                              "PaymentForm","PaymentNote","PaymentCostCenter","PaymentWBS","PaymentInternalNumber",
+                              "PayeeStreetAddress1","PayeeStreetAddress2","PayeeCity","PayeeState_Province",
+                              "PayeeZip","PayeeCountry","PayeeTIN_NPI_DUNS","ProductName2","ProductName3",
+                              "ProductName4","ProductName5","YearOfFIrstPayment1","YearOfFIrstPayment2",
+                              "YearOfFIrstPayment3","YearOfFIrstPayment4","YearOfFIrstPayment5","PICRPhysicianIndicator",
+                              "ClinicalTrialsGovIdentifier","StudyName","ContextOfResearch","JILocalCRID1",
+                              "JILocalCRID2","JILocalCRID3","JILocalCRID4","JILocalCRID5","JICRIDType1","JICRIDType2",
+                              "JICRIDType3","JICRIDType4","JICRIDType5","PreClinicalResearchIndicator",
+                              "ResearchInformationLink","ReasonForChange","LodgingCity","LodgingCountry","CustomerClaims",
+                              "SubmissionStatus","LinkageWithContract","ProductCategory","FiscalYearSpend",
+                              "SAPVendorID","AccountingDocumentNumber","VoluntaryEFPIAFlag","VoluntaryEFPIAReason",
+                              "Product","ThirdPartyLocalId","ThirdPartyLocalIdType","BusinessFranchise",
+                              "ApprovalID","PurposeofSupport","PaymentMadeTo","GLAccount","ProductQuantity",
+                              "TherapeuticArea","PatientGroupsFunding","LocalDisclosureofPatientOrganizationFunding",
+                              "ClinicalID","Brand")
+
+#Inserting value into the columns
+PMUTemplate_Spend$Division <- "14"
+PMUTemplate_Spend$Country <-"SI"
+PMUTemplate_Spend$LocalCRID <- BoundData$TaxNo
+PMUTemplate_Spend$LocalCRIDType <-"SIM"
+PMUTemplate_Spend$SpendPurpose <- BoundData$SP.EFPIA
+PMUTemplate_Spend$SpendDate <- BoundData$Clearing.date
+PMUTemplate_Spend$SpendAmount <- BoundData$Amount.in.LC
+PMUTemplate_Spend$SpendCurrency <- BoundData$LCurr
+PMUTemplate_Spend$XBorderFlag <- "N" 
+PMUTemplate_Spend$PaymentMethod <- "Direct"
+PMUTemplate_Spend$SpendPONumber <- BoundData$Purchasing.Document
+PMUTemplate_Spend$ReasonForChange <- "New Record"
+PMUTemplate_Spend$VoluntaryEFPIAFlag <- "N"
+
+write.xlsx(PMUTemplate_Spend,file = "Spend PMU.xlsx")
+
+#......................................................CR PMU...................................................
+
+FullDetails_AddVal <- data.frame(FullDetails)
+FullDetails_AddVal <- FullDetails_AddVal %>% select(Tax.ID, Address.Line.1, City, Postal.Code)
+
+VMD_AddVal <- data.frame(VMDMap)
+VMD_AddVal <- VMD_AddVal %>% select(iftax, Adress, LFA1.ORT01...City)
+
+AddressBoundMerge <- merge(BoundData, VMDMap, by.x = "TaxNo", by.y = "iftax", all.x = TRUE)
+AddressBoundMerge <- data.frame(lapply(AddressBoundMerge,trimws), stringsAsFactors = FALSE)
+AddressBoundMerge <- AddressBoundMerge %>% filter(TaxNo != "0")
+
+AddressBoundMerge$Vendor.Type <- NULL
+
+#Remove duplicates
+CRData <- distinct(AddressBoundMerge, TaxNo, .keep_all = TRUE)
+
+#Creating dummy PMU CR table
+PMUTemplate_CR <- as.data.frame(matrix(nrow = nrow(CRData), ncol = 143))
+
+#Assigning names to columns
+names(PMUTemplate_CR) <- c("CRId","CRCategory","FirstName","MiddleName","LastName","InstitutionName","Degree",
+                           "Gender","DateOfBirth","Title","Specialty_1","Specialty_2","Specialty_3","Specialty_4",
+                           "Specialty_5","Counsel","OrganizationName","BusinessArea","NovartisContact","OrganizationScope",
+                           "Brick","IdNumber_1","IdType_1","IdOfficial_1","IdNumber_2","IdType_2","IdOfficial_2",
+                           "IdNumber_3","IdType_3","IdOfficial_3","Country","Division","CRType","EMailAddress",
+                           "BenefactorCategory","ConsentIndicator","ConsentEffectiveDate","ConsentEndDate",
+                           "ConsentComment","ConsentReceivedDate","ConsentID","ReasonForChange","AddressType_1","AddressLine1_1",
+                           "AddressLine2_1","AddressLine3_1","AddressLine4_1","City_1","ZipPostalCode_1","StateProvinceRegionCounty_1",
+                           "CountryAddress_1","AddressType_2","AddressLine1_2","AddressLine2_2","AddressLine3_2","AddressLine4_2",
+                           "City_2","ZipPostalCode_2","StateProvinceRegionCounty_2","CountryAddress_2","AddressType_3",
+                           "AddressLine1_3","AddressLine2_3","AddressLine3_3","AddressLine4_3","City_3","ZipPostalCode_3",
+                           "StateProvinceRegionCounty_3","CountryAddress_3","AddressType_4","AddressLine1_4","AddressLine2_4",
+                           "AddressLine3_4","AddressLine4_4","City_4","ZipPostalCode_4","StateProvinceRegionCounty_4",
+                           "CountryAddress_4","AddressType_5","AddressLine1_5","AddressLine2_5","AddressLine3_5","AddressLine4_5",
+                           "City_5","ZipPostalCode_5","StateProvinceRegionCounty_5","CountryAddress_5","AddressType_6",
+                           "AddressLine1_6","AddressLine2_6","AddressLine3_6","AddressLine4_6","City_6","ZipPostalCode_6",
+                           "StateProvinceRegionCounty_6","CountryAddress_6","AddressType_7","AddressLine1_7",
+                           "AddressLine2_7","AddressLine3_7","AddressLine4_7","City_7","ZipPostalCode_7",
+                           "StateProvinceRegionCounty_7","CountryAddress_7","AddressType_8","AddressLine1_8",
+                           "AddressLine2_8","AddressLine3_8","AddressLine4_8","City_8","ZipPostalCode_8",
+                           "StateProvinceRegionCounty_8","CountryAddress_8","AddressType_9","AddressLine1_9",
+                           "AddressLine2_9","AddressLine3_9","AddressLine4_9","City_9","ZipPostalCode_9",
+                           "StateProvinceRegionCounty_9","CountryAddress_9","AddressType_10","AddressLine1_10",
+                           "AddressLine2_10","AddressLine3_10","AddressLine4_10","City_10","ZipPostalCode_10",
+                           "StateProvinceRegionCounty_10","CountryAddress_10","DepartmentName","JapanFullNameKana",
+                           "OrganizationName(Local)","UniversityName","UniversityCity","UniversityZipCode",
+                           "ContactPerson","PhoneNumber","DiseaseArea","DiseaseName","Salutation")
+
+#Inserting value into the columns
+PMUTemplate_CR$CRCategory <- CRData$CR.Type
+PMUTemplate_CR$FirstName  <- CRData$First.Name
+PMUTemplate_CR$LastName <- CRData$Last.Name
+PMUTemplate_CR$OrganizationName <- CRData$Name
+PMUTemplate_CR$IdNumber_1 <- CRData$TaxNo
+PMUTemplate_CR$IdType_1 <- "SIM"
+PMUTemplate_CR$Country <- "SI"
+PMUTemplate_CR$Division <- "14"
+PMUTemplate_CR$ConsentIndicator <- CRData$Consent
+PMUTemplate_CR$ConsentEffectiveDate <- CRData$New.consent.date
+PMUTemplate_CR$ConsentReceivedDate <- CRData$New.Consent.entry.date
+PMUTemplate_CR$AddressType_1 <- "Primary"
+PMUTemplate_CR$AddressLine1_1 <- CRData$Adress
+PMUTemplate_CR$City_1 <- CRData$LFA1.ORT01...City
+PMUTemplate_CR$ZipPostalCode_1 <- CRData$Postal.Code
+PMUTemplate_CR$CountryAddress_1 <- "SI"
+PMUTemplate_CR$ConsentID <- CRData$New.consent.ID
+PMUTemplate_CR$CRId <- CRData$CR.Global.Xpend.ID
+
+write.xlsx(PMUTemplate_CR, file = "CR PMU.xlsx")
